@@ -9,7 +9,13 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import socketio
 import base64
+from dotenv import load_dotenv
 import os
+
+
+load_dotenv()  # Load environment variables from .env
+MONGO_URI = os.getenv("MONGO_URI")  # Now you can use it
+
 
 # Socket.IO
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -24,7 +30,7 @@ app.add_middleware(
 fastapi_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 # MongoDB
-client = AsyncIOMotorClient("mongodb+srv://nithinkodam69:nithin1k%40%24@cluster0.pamoj.mongodb.net/?retryWrites=true&w=majority")
+client = AsyncIOMotorClient(MONGO_URI)
 db = client.chatting_db
 
 # JWT & Password

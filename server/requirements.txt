@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+uvicorn[standard]
+requests
+pymongo 
+python-socketio[asgi]
+python-multipart
+pydantic[email]
+passlib[bcrypt]
+motor
+python-jose[cryptography]
+python-socketio[asyncio_server]
+aiofiles
+python-dotenv
+socket.io-client
+bcrypt==3.2.0
