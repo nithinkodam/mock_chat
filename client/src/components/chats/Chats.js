@@ -16,7 +16,7 @@ const Chats = () => {
   const fetchAllUsersToMap = async (signal) => {
     if (!token) return {};
     try {
-      const usersRes = await axios.get('http://localhost:8000/users', {
+      const usersRes = await axios.get('https://mock-chat-backend.onrender.com/users', {
         headers: { Authorization: `Bearer ${token}` },
         signal,
       });
@@ -36,7 +36,7 @@ const Chats = () => {
   const fetchProfileForUser = async (username) => {
     if (!token || !username) return null;
     try {
-      const res = await axios.get(`http://localhost:8000/him?name=${encodeURIComponent(username)}`, {
+      const res = await axios.get(`https://mock-chat-backend.onrender.com/him?name=${encodeURIComponent(username)}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const profile = res.data?.profile ?? "";
@@ -51,20 +51,20 @@ const Chats = () => {
     if (!token) return;
     try {
       // Get current user
-      const res = await axios.get('http://localhost:8000/me', {
+      const res = await axios.get('https://mock-chat-backend.onrender.com/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const currentUser = res.data;
       setUser(currentUser);
 
       // Get chat list
-      const chatsRes = await axios.get(`http://localhost:8000/${currentUser.username}/chats`, {
+      const chatsRes = await axios.get(`https://mock-chat-backend.onrender.com/${currentUser.username}/chats`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setChatList(chatsRes.data || []);
 
       // Get notification count
-      const notifRes = await axios.get('http://localhost:8000/notifications/count', {
+      const notifRes = await axios.get('https://mock-chat-backend.onrender.com/notifications/count', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRequestsCount(notifRes.data?.count ?? 0);
