@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { initSocket } from '../socket';
+import { Link } from 'react-router-dom';
 
 const Signin = () => {
   const [formData, setFormData] = useState({ email: '', password: '' });
@@ -12,11 +13,11 @@ const Signin = () => {
     e.preventDefault();
     setError('');
     try {
-      const res = await axios.post('https://mock-chat-backend.onrender.com/signin', formData);
+      const res = await axios.post('http://localhost:8000/signin', formData);
       const token = res.data.access_token;
       localStorage.setItem('token', token);
 
-      const r = await axios.get('https://mock-chat-backend.onrender.com/me', {
+      const r = await axios.get('http://localhost:8000/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const username = r.data.username;
@@ -79,9 +80,12 @@ const Signin = () => {
 
         <p className="mt-10 text-center text-sm text-gray-500">
           Not a member?{' '}
-          <a href="/signup" className="font-semibold text-indigo-600 hover:text-indigo-500">
+          <Link
+            to="/signup"
+            className="font-semibold text-indigo-600 hover:text-indigo-500"
+          >
             Signup
-          </a>
+          </Link>
         </p>
       </div>
     </div>
