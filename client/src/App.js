@@ -1,4 +1,4 @@
-import {BrowserRouter,Route,Routes} from 'react-router-dom'
+import {HashRouter as BrowserRouter,Route,Routes} from 'react-router-dom'
 import './App.css';
 import Chats from './components/chats/Chats'
 import Search from './components/search/Search';
