@@ -12,11 +12,11 @@ const Signin = () => {
     e.preventDefault();
     setError('');
     try {
-      const res = await axios.post('http://localhost:8000/signin', formData);
+      const res = await axios.post('https://mock-chat-backend.onrender.com/signin', formData);
       const token = res.data.access_token;
       localStorage.setItem('token', token);
 
-      const r = await axios.get('http://localhost:8000/me', {
+      const r = await axios.get('https://mock-chat-backend.onrender.com/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const username = r.data.username;
