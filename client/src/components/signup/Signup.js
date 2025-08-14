@@ -12,7 +12,7 @@ const Signup = () => {
     e.preventDefault();
     setError('');
     try {
-      const res = await axios.post('http://localhost:8000/signup', formData);
+      const res = await axios.post('https://mock-chat-backend.onrender.com/signup', formData);
       // alert(res.data.message);
       Swal.fire({
             title: 'Account created!',
