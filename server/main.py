@@ -20,7 +20,7 @@ load_dotenv()
 # ----------------------------
 app = FastAPI()
 
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://chitchat-ji1p.onrender.com")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_ORIGIN],
