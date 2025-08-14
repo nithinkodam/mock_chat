@@ -1,0 +1,26 @@
+# ===== Python (backend) =====
+server/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+server/.env
+server/venv/
+server/.venv/
+server/env/
+
+# ===== Node.js (frontend) =====
+client/node_modules/
+client/dist/
+client/build/
+client/.env
+npm-debug.log
+yarn-error.log
+
+# ===== OS files =====
+.DS_Store
+Thumbs.db
+
+# ===== IDE settings =====
+.vscode/
+.idea/

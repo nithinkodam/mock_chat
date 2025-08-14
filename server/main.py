@@ -1,49 +1,69 @@
-from fastapi import FastAPI, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-import socketio
-import base64
+from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
+import base64
+import socketio
+import uvicorn
 import os
 
+load_dotenv()
 
-load_dotenv()  # Load environment variables from .env
-MONGO_URI = os.getenv("MONGO_URI")  # Now you can use it
-
-
-# Socket.IO
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# ----------------------------
+# FastAPI
+# ----------------------------
 app = FastAPI()
+
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-fastapi_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
+# ----------------------------
+# Socket.IO
+# ----------------------------
+sio = socketio.AsyncServer(
+    async_mode="asgi",
+    cors_allowed_origins=[FRONTEND_ORIGIN],
+)
+socket_app = socketio.ASGIApp(sio, app)
+
+# ----------------------------
 # MongoDB
-client = AsyncIOMotorClient(MONGO_URI)
-db = client.chatting_db
+# ----------------------------
+MONGO_URI = os.getenv("MONGO_URI", "")
+if not MONGO_URI:
+    raise RuntimeError("MONGO_URI is not set. Put it in your environment or .env")
 
-# JWT & Password
-SECRET_KEY = "my_chatting_gone"
+client = AsyncIOMotorClient(MONGO_URI)
+db = client["chatting_db"]
+
+# ----------------------------
+# Auth / Security
+# ----------------------------
+SECRET_KEY = os.getenv("SECRET_KEY", "my_chatting_gone")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="signin")
 
-# Active socket connections
-user_sockets = {}
+# username -> sid
+connected_users: Dict[str, str] = {}
 
-# Schemas
+# ----------------------------
+# Models
+# ----------------------------
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
@@ -59,25 +79,30 @@ class Token(BaseModel):
 
 class MessageInput(BaseModel):
     text: str
-    image: str | None = None
+    image: Optional[str] = None
 
-class MarkReadRequest(BaseModel):
-    username: str
+class RequestAction(BaseModel):
+    requesterUsername: str
 
-# Utils
-def create_access_token(data: dict):
+class FriendRequest(BaseModel):
+    toUsername: str
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode["exp"] = expire
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
@@ -85,25 +110,105 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
     user = await db.users.find_one({"email": email})
     if not user:
-        raise HTTPException(404, detail="User not found")
+        raise HTTPException(status_code=401, detail="User not found")
+    user.pop("password", None)
     return user
 
-@app.get("/me")
-async def me(user=Depends(get_current_user)):
-    return {
-        "username": user["username"],
-        "email": user["email"],
-        "requests": user["requests"],
-        "friends": user["friends"],
-        "profile": user["profile"]
-    }
+async def emit_to_user(username: str, event: str, data: Any):
+    sid = connected_users.get(username)
+    if sid:
+        await sio.emit(event, data, to=sid)
 
+async def emit_to_all(event: str, data: Any):
+    # Broadcast to all connected sockets
+    await sio.emit(event, data)
+
+# ----------------------------
+# Socket.IO Events
+# ----------------------------
+@sio.event
+async def connect(sid, environ, auth):
+    token = auth.get("token") if auth else None
+    if not token:
+        await sio.disconnect(sid)
+        return
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            await sio.disconnect(sid)
+            return
+        user = await db.users.find_one({"email": email})
+        if not user:
+            await sio.disconnect(sid)
+            return
+        username = user["username"]
+        connected_users[username] = sid
+        # Send initial counters upon connect
+        requests = user.get("requests", [])
+        await emit_to_user(username, "notifications:count", {"count": len(requests)})
+    except JWTError:
+        await sio.disconnect(sid)
+
+@sio.event
+async def disconnect(sid):
+    to_remove = None
+    for uname, socket_id in connected_users.items():
+        if socket_id == sid:
+            to_remove = uname
+            break
+    if to_remove:
+        del connected_users[to_remove]
+
+@sio.event
+async def user_connected(sid, data):
+    username = data.get("username")
+    if username:
+        connected_users[username] = sid
+
+# Mark chat as read from client
+@sio.event
+async def chat_read(sid, data):
+    me = data.get("me")
+    friend = data.get("friend")
+    if not me or not friend:
+        return
+    # mark messages as read in DB
+    user_doc = await db.users.find_one({"username": me})
+    if not user_doc:
+        return
+
+    updated = False
+    for f in user_doc.get("friends", []):
+        if f.get("name") == friend:
+            for m in f.get("messages", []):
+                if m.get("type") == "received" and m.get("status") == "unread":
+                    m["status"] = "read"
+                    updated = True
+            break
+    if updated:
+        await db.users.replace_one({"_id": user_doc["_id"]}, user_doc)
+
+    # Emit unseen reset for this chat to the reader
+    await emit_to_user(me, "chat:unseen_update", {"friendUsername": friend, "unseenCount": 0})
+
+# ----------------------------
+# REST: Health
+# ----------------------------
+@app.get("/ping")
+async def ping():
+    return {"message": "pong"}
+
+# ----------------------------
+# REST: Auth
+# ----------------------------
 @app.post("/signup")
 async def signup(user: UserCreate):
     if await db.users.find_one({"email": user.email}) or await db.users.find_one({"username": user.username}):
-        raise HTTPException(400, detail="Email or Username already exists")
+        raise HTTPException(status_code=400, detail="Email or Username already exists")
     hashed_pw = get_password_hash(user.password)
     await db.users.insert_one({
         "username": user.username,
@@ -113,282 +218,271 @@ async def signup(user: UserCreate):
         "friends": [],
         "profile": ""
     })
+
+    # Emit to all connected clients that a new user was created
+    await emit_to_all("user:created", {"username": user.username, "profile": ""})
+
     return {"message": "User created successfully"}
 
 @app.post("/signin", response_model=Token)
-async def login(user: UserLogin):
+async def signin(user: UserLogin):
     db_user = await db.users.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["password"]):
-        raise HTTPException(401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token({"sub": db_user["email"]})
     return {"access_token": token, "token_type": "bearer"}
 
-@app.get("/{username}/chats")
-async def get_chats(username: str, user=Depends(get_current_user)):
-    if username != user["username"]:
-        raise HTTPException(403, "Unauthorized")
-    chats = []
-    for friend in user.get("friends", []):
-        messages = friend["messages"]
-        unseen = sum(1 for m in messages if m["type"] == "received" and m["status"] == "unread")
-        chats.append({
-            "friendUsername": friend["name"],
-            "unseenCount": unseen
-        })
-    return chats
+# ----------------------------
+# REST: Profile & User Info
+# ----------------------------
+@app.get("/me")
+async def me(current_user=Depends(get_current_user)):
+    return {
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "requests": current_user.get("requests", []),
+        "friends": current_user.get("friends", []),
+        "profile": current_user.get("profile", "")
+    }
 
-@app.get("/chat/{friend_username}")
-async def fetch_chat(friend_username: str, user=Depends(get_current_user)):
-    friend = await db.users.find_one({"username": friend_username})
+@app.post("/profile/upload")
+async def upload_profile_image(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    content = await file.read()
+    encoded = base64.b64encode(content).decode()
+    await db.users.update_one({"email": current_user["email"]}, {"$set": {"profile": encoded}})
+
+    # Broadcast profile update to everyone so frontends update images in real-time.
+    await emit_to_all("profile:updated", {"username": current_user["username"], "profile": encoded})
+
+    return {"message": "Profile image uploaded"}
+
+@app.get("/him")
+async def get_him_profile(name: str, current_user=Depends(get_current_user)):
+    friend = await db.users.find_one({"username": name})
     if not friend:
-        raise HTTPException(404, "Friend not found")
-    your_msgs = next(f["messages"] for f in user["friends"] if f["name"] == friend_username)
-    await db.users.update_one(
-        {"email": user["email"], "friends.name": friend_username},
-        {"$set": { "friends.$.messages.$[m].status": "read" }},
-        array_filters=[{"m.status": "unread"}]
-    )
-    return {"messages": your_msgs}
+        raise HTTPException(status_code=404, detail="Friend not found")
+    return {"name": friend["username"], "profile": friend.get("profile", "")}
 
-@app.post("/chat/{friend_username}/send")
-async def send_message(friend_username: str, data: dict, user=Depends(get_current_user)):
-    text = data["text"]
-    timestamp = datetime.utcnow()
-    await db.users.update_one(
-        {"email": user["email"], "friends.name": friend_username},
-        {"$push": {"friends.$.messages": {
-            "text": text, "image": "No", "time": timestamp, "type": "sent", "status": "read"
-        }}}
-    )
-    await db.users.update_one(
-        {"username": friend_username, "friends.name": user["username"]},
-        {"$push": {"friends.$.messages": {
-            "text": text, "image": "No", "time": timestamp, "type": "received", "status": "unread"
-        }}}
-    )
-    # Emit real-time message to recipient
-    if friend_username in user_sockets:
-        await sio.emit("message", {
-            "from": user["username"],
-            "to": friend_username,
-            "text": text,
-            "image": "No",
-            "timestamp": str(timestamp)
-        }, to=user_sockets[friend_username])
-    return {"message": "sent"}
-
-@app.post("/chat/{friend_username}/sendimage")
-async def send_image_message(friend_username: str, data: dict, user=Depends(get_current_user)):
-    text = data["text"]
-    timestamp = datetime.utcnow()
-    await db.users.update_one(
-        {"email": user["email"], "friends.name": friend_username},
-        {"$push": {"friends.$.messages": {
-            "text": text, "image": "Yes", "time": timestamp, "type": "sent", "status": "read"
-        }}}
-    )
-    await db.users.update_one(
-        {"username": friend_username, "friends.name": user["username"]},
-        {"$push": {"friends.$.messages": {
-            "text": text, "image": "Yes", "time": timestamp, "type": "received", "status": "unread"
-        }}}
-    )
-    if friend_username in user_sockets:
-        await sio.emit("message", {
-            "from": user["username"],
-            "to": friend_username,
-            "text": text,
-            "image": "Yes",
-            "timestamp": str(timestamp)
-        }, to=user_sockets[friend_username])
-    return {"message": "sent"}
-
-
-@app.get("/notifications/count")
-async def notif_count(user=Depends(get_current_user)):
-    count = len(user.get("requests", []))
-    return {"count": count}
-
+# New endpoint: fetch all users (username, email, profile)
+@app.get("/users")
+async def get_all_users(current_user=Depends(get_current_user)):
+    # return a list of users with limited fields (no password)
+    users = await db.users.find({}, {"password": 0}).to_list(length=200)
+    # Clean up documents to only include what frontend needs
+    result = []
+    for u in users:
+        result.append({
+            "username": u.get("username"),
+            "email": u.get("email"),
+            "profile": u.get("profile", "")
+        })
+    return result
 
 @app.get("/users/search")
-async def search_users(q: str, user=Depends(get_current_user)):
+async def search_users(q: str, current_user=Depends(get_current_user)):
     all_users = await db.users.find({"username": {"$regex": q, "$options": "i"}}).to_list(20)
-    return [{"username": u["username"], "email": u["email"], "profile": u["profile"]} for u in all_users if u["email"] != user["email"]]
+    return [
+        {"username": u["username"], "email": u["email"], "profile": u.get("profile", "")}
+        for u in all_users if u["email"] != current_user["email"]
+    ]
 
+# ----------------------------
+# REST: Friend Requests
+# ----------------------------
+@app.get("/notifications/count")
+async def notif_count(current_user=Depends(get_current_user)):
+    return {"count": len(current_user.get("requests", []))}
 
 @app.post("/requests")
-async def send_request(data: dict, user=Depends(get_current_user)):
-    toUsername = data.get("toUsername")
-    if not await db.users.find_one({"username": toUsername}):
-        raise HTTPException(404, "User not found")
+async def send_request(data: FriendRequest, current_user=Depends(get_current_user)):
+    if data.toUsername == current_user["username"]:
+        raise HTTPException(status_code=400, detail="Cannot send request to yourself")
+    target = await db.users.find_one({"username": data.toUsername})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
     await db.users.update_one(
-        {"username": toUsername},
-        {"$addToSet": {"requests": user["username"]}}
+        {"username": data.toUsername},
+        {"$addToSet": {"requests": current_user["username"]}}
     )
-    if toUsername in user_sockets:
-        await sio.emit("friend_request", {"from": user["username"]}, to=user_sockets[toUsername])
+
+    # realtime notification counter to receiver
+    target_after = await db.users.find_one({"username": data.toUsername})
+    await emit_to_user(
+        data.toUsername,
+        "notifications:count",
+        {"count": len(target_after.get("requests", []))}
+    )
+
+    # (Optional) notify receiver who sent it
+    await emit_to_user(
+        data.toUsername,
+        "request:new",
+        {"from": current_user["username"]}
+    )
     return {"message": "Request sent"}
 
-
 @app.post("/requests/accept")
-async def accept_request(data: dict, user=Depends(get_current_user)):
-    requester_username = data.get("requesterUsername")
-    requester = await db.users.find_one({"username": requester_username})
+async def accept_request(data: RequestAction, current_user=Depends(get_current_user)):
+    requester = await db.users.find_one({"username": data.requesterUsername})
     if not requester:
-        raise HTTPException(404, "Requester not found")
+        raise HTTPException(status_code=404, detail="Requester not found")
 
-    # Remove request
-    await db.users.update_one(
-        {"username": user["username"]},
-        {"$pull": {"requests": requester_username}}
-    )
-    # Remove request
-    await db.users.update_one(
-        {"username": requester_username},
-        {"$pull": {"requests": user["username"] }}
-    )
+    # remove from both requests arrays (in case both sent)
+    await db.users.update_one({"username": current_user["username"]}, {"$pull": {"requests": data.requesterUsername}})
+    await db.users.update_one({"username": data.requesterUsername}, {"$pull": {"requests": current_user["username"]}})
 
-    # Add each other as friends
+    # add each other as friends if not already
     await db.users.update_one(
-        {"username": user["username"]},
+        {"username": current_user["username"]},
         {"$addToSet": {"friends": {"name": requester["username"], "messages": []}}}
     )
     await db.users.update_one(
-        {"username": requester_username},
-        {"$addToSet": {"friends": {"name": user["username"], "messages": []}}}
+        {"username": data.requesterUsername},
+        {"$addToSet": {"friends": {"name": current_user["username"], "messages": []}}}
     )
+
+    # realtime: decrement counter for current user (their requests list changed)
+    me_after = await db.users.find_one({"username": current_user["username"]})
+    await emit_to_user(
+        current_user["username"],
+        "notifications:count",
+        {"count": len(me_after.get("requests", []))}
+    )
+
+    # realtime: both should see each other in chats
+    await emit_to_user(current_user["username"], "friend:added", {"friendUsername": requester["username"]})
+    await emit_to_user(requester["username"], "friend:added", {"friendUsername": current_user["username"]})
+
     return {"message": "Friend added"}
 
-
 @app.post("/requests/reject")
-async def reject_request(data: dict, user=Depends(get_current_user)):
-    requester_username = data.get("requesterUsername")
-    await db.users.update_one(
-        {"username": user["username"]},
-        {"$pull": {"requests": requester_username}}
+async def reject_request(data: RequestAction, current_user=Depends(get_current_user)):
+    await db.users.update_one({"username": current_user["username"]}, {"$pull": {"requests": data.requesterUsername}})
+    me_after = await db.users.find_one({"username": current_user["username"]})
+    await emit_to_user(
+        current_user["username"],
+        "notifications:count",
+        {"count": len(me_after.get("requests", []))}
     )
     return {"message": "Request rejected"}
 
+# ----------------------------
+# REST: Chats
+# ----------------------------
+@app.get("/{username}/chats")
+async def get_chats(username: str, current_user=Depends(get_current_user)):
+    if username != current_user["username"]:
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
+    chats = []
+    for friend in current_user.get("friends", []):
+        messages = friend.get("messages", [])
+        unseen = sum(1 for m in messages if m.get("type") == "received" and m.get("status") == "unread")
+        chats.append({"friendUsername": friend["name"], "unseenCount": unseen})
+    # sort by last message time desc (optional)
+    def last_time(fmsgs: List[dict]):
+        if not fmsgs:
+            return ""
+        return max(m.get("time", "") for m in fmsgs)
+    chats.sort(key=lambda c: last_time(next((f["messages"] for f in current_user.get("friends", []) if f["name"] == c["friendUsername"]), [])), reverse=True)
+    return chats
 
-@app.post("/profile/upload")
-async def upload_profile_image(file: UploadFile = File(...), user=Depends(get_current_user)):
-    content = await file.read()
-    encoded = base64.b64encode(content).decode()
+@app.get("/chat/{friend_username}")
+async def fetch_chat(friend_username: str, current_user=Depends(get_current_user)):
+    your_msgs = next((f.get("messages", []) for f in current_user.get("friends", []) if f["name"] == friend_username), [])
+    # mark received unread -> read
     await db.users.update_one(
-        {"email": user["email"]},
-        {"$set": {"profile": encoded}}
+        {"email": current_user["email"], "friends.name": friend_username},
+        {"$set": {"friends.$[f].messages.$[m].status": "read"}},
+        array_filters=[{"f.name": friend_username}, {"m.status": "unread", "m.type": "received"}]
     )
-    return {"message": "Profile image uploaded"}
+    return {"messages": your_msgs}
 
+from datetime import datetime, timezone
 
+@app.post("/chat/{friend_username}/send")
+async def send_chat_message(friend_username: str, data: MessageInput, current_user=Depends(get_current_user)):
+    # Make an explicit UTC ISO timestamp with 'Z' (no ambiguity).
+    timestamp = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    image_flag = "Yes" if data.image else "No"
+    text_payload = data.image if data.image else data.text
 
-@app.get("/friend/{friend_username}/profile")
-async def get_friend_profile(friend_username: str, user=Depends(get_current_user)):
-    # Get the current user from the DB
-    current_user = db.users.find_one({"email": user["email"]})
-    if not current_user:
-        raise HTTPException(status_code=401, detail="User not found")
+    # push to sender's copy
+    await db.users.update_one(
+        {"email": current_user["email"], "friends.name": friend_username},
+        {"$push": {"friends.$.messages": {
+            "text": text_payload, "image": image_flag, "time": timestamp, "type": "sent", "status": "read"
+        }}}
+    )
 
-    # Look up the friend in the user's friend list
-    friend_entry = next((f for f in current_user.get("friends", []) if f["name"] == friend_username), None)
-    if not friend_entry:
-        raise HTTPException(status_code=404, detail="Friend not found in your friend list")
+    # push to receiver's copy
+    await db.users.update_one(
+        {"username": friend_username, "friends.name": current_user["username"]},
+        {"$push": {"friends.$.messages": {
+            "text": text_payload, "image": image_flag, "time": timestamp, "type": "received", "status": "unread"
+        }}}
+    )
 
-    # Also get full profile of the friend if needed
-    friend_user = db.users.find_one({ "username": friend_username })
+    # realtime: deliver message to receiver (send the same timestamp)
+    await emit_to_user(friend_username, "message:new", {
+        "from": current_user["username"],
+        "to": friend_username,
+        "message": {
+            "text": text_payload,
+            "image": (image_flag == "Yes"),
+            "time": timestamp
+        }
+    })
 
-    return {
-        "name": friend_entry["name"],
-        "profile": friend_user.get("profile", "") if friend_user else "",
-        "messages": friend_entry.get("messages", [])
-    }
-    
-    
-
-@app.get("/profile/{friend_username}")
-async def get_friend_profile(friend_username: str, user=Depends(get_current_user)):
-    # Fetch the current user
-    current_user = db.users.find_one({"email": user["email"]})
-    if not current_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Look for the friend in the current user's friend list
-    friend_entry = next((f for f in current_user.get("friends", []) if f["name"] == friend_username), None)
-    if not friend_entry:
-        raise HTTPException(status_code=404, detail="Friend not in your list")
-
-    # Fetch friend's full profile
-    friend_user = db.users.find_one({ "username": friend_username })
-    if not friend_user:
-        raise HTTPException(status_code=404, detail="Friend profile not found")
-
-    return {
-        "name": friend_entry["name"],
-        "profile": friend_user.get("profile", ""),  # base64-encoded string
-        "messages": friend_entry.get("messages", [])
-    }
-    
-    
-@app.get("/him")
-async def get_him_profile(name: str, user=Depends(get_current_user)):
-    friend = await db.users.find_one({ "username": name })
-    if not friend:
-        raise HTTPException(status_code=404, detail="Friend not found")
-    return {
-        "profile": friend.get("profile", "")
-    }
-
-from bson import ObjectId
-
-from fastapi import Request
-
-@app.post("/chat/mark_read")
-async def mark_messages_read(data: dict, request: Request, current_user=Depends(get_current_user)):
-    try:
-        friend_username = data.get("username")
-        # print("Looking for friend:", friend_username)
-        updated = False
-
-        for friend in current_user["friends"]:
-            if friend["name"] == friend_username:
-                # print(friend["messages"])
-                for msg in friend["messages"]:
-                    if msg["type"] == "received" and msg["status"] == "unread":
-                        msg["status"] = "read"
-                        updated = True
+    # realtime: bump unseen count for receiver's chat list for this sender
+    rec_doc = await db.users.find_one({"username": friend_username})
+    unseen = 0
+    if rec_doc:
+        for f in rec_doc.get("friends", []):
+            if f.get("name") == current_user["username"]:
+                unseen = sum(1 for m in f.get("messages", []) if m.get("type") == "received" and m.get("status") == "unread")
                 break
 
-        if updated:
-            await db.users.replace_one({"_id": current_user["_id"]}, current_user)
+    await emit_to_user(friend_username, "chat:unseen_update", {"friendUsername": current_user["username"], "unseenCount": unseen})
 
-        return {"message": "Messages marked as read"}
+    return {"message": "sent"}
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+@app.post("/chat/mark_read")
+async def mark_messages_read(data: dict, current_user=Depends(get_current_user)):
+    friend_username = data.get("username")
+    if not friend_username:
+        raise HTTPException(status_code=400, detail="username required")
 
+    user_doc = await db.users.find_one({"email": current_user["email"]})
+    if not user_doc:
+        raise HTTPException(status_code=401, detail="User not found")
 
+    updated = False
+    for friend in user_doc.get("friends", []):
+        if friend.get("name") == friend_username:
+            for msg in friend.get("messages", []):
+                if msg.get("type") == "received" and msg.get("status") == "unread":
+                    msg["status"] = "read"
+                    updated = True
+            break
 
-# ==== Socket.IO Events ====
-@sio.event
-async def connect(sid, environ, auth):
-    token = auth.get("token") if auth else None
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-        user = await db.users.find_one({"email": email})
-        if user:
-            user_sockets[user["username"]] = sid
-            print(f"User {user['username']} connected with sid: {sid}")
-    except Exception as e:
-        print("Connection rejected:", e)
-        return False  # Reject connection
+    if updated:
+        await db.users.replace_one({"_id": user_doc["_id"]}, user_doc)
 
-@sio.event
-def disconnect(sid):
-    to_remove = [u for u, s in user_sockets.items() if s == sid]
-    for u in to_remove:
-        del user_sockets[u]
-        print(f"User {u} disconnected.")
+    # also emit unseen reset to the caller
+    await emit_to_user(current_user["username"], "chat:unseen_update", {"friendUsername": friend_username, "unseenCount": 0})
+    return {"message": "Messages marked as read"}
+
+# ----------------------------
+# Root
+# ----------------------------
+@app.get("/")
+async def root():
+    return {"message": "FastAPI Chat Backend with Socket.IO"}
+
+# ----------------------------
+# Run
+# ----------------------------
+if __name__ == "__main__":
+    uvicorn.run("main:socket_app", host="0.0.0.0", port=8000, reload=True)

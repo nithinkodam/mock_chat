@@ -1,49 +1,67 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { io } from 'socket.io-client';
-
-const socket = io("http://localhost:8000", {
-  auth: { token: localStorage.getItem("token") }
-});
+import { getSocket } from '../socket';
 
 const Notifications = () => {
   const [requests, setRequests] = useState([]);
 
+  const loadRequests = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const res = await axios.get('http://localhost:8000/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setRequests(res.data.requests || []);
+    } catch (err) {
+      console.error('Failed to fetch requests', err);
+    }
+  };
+
   useEffect(() => {
-    const fetchRequests = async () => {
-      const token = localStorage.getItem('token');
-      try {
-        const res = await axios.get('http://localhost:8000/me', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setRequests(res.data.requests || []);
-      } catch (err) {
-        console.error(err);
-      }
+    loadRequests();
+  }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    const socket = getSocket(token);
+
+    const onRequestNew = ({ from }) => {
+      setRequests(prev => (prev.includes(from) ? prev : [from, ...prev]));
     };
-    fetchRequests();
 
-    socket.on("new_friend_request", (username) => {
-      setRequests(prev => [...prev, username]);
-    });
+    socket.on('request:new', onRequestNew);
 
-    return () => socket.off("new_friend_request");
+    return () => {
+      socket.off('request:new', onRequestNew);
+    };
   }, []);
 
   const handleAccept = async (username) => {
     const token = localStorage.getItem('token');
-    await axios.post('http://localhost:8000/requests/accept', { requesterUsername: username }, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    setRequests(requests.filter(r => r !== username));
+    try {
+      await axios.post('http://localhost:8000/requests/accept', { requesterUsername: username }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setRequests(prev => prev.filter(r => r !== username));
+    } catch (err) {
+      console.error('Accept failed', err);
+      alert('Accept failed');
+    }
   };
 
   const handleReject = async (username) => {
     const token = localStorage.getItem('token');
-    await axios.post('http://localhost:8000/requests/reject', { requesterUsername: username }, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    setRequests(requests.filter(r => r !== username));
+    try {
+      await axios.post('http://localhost:8000/requests/reject', { requesterUsername: username }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setRequests(prev => prev.filter(r => r !== username));
+    } catch (err) {
+      console.error('Reject failed', err);
+      alert('Reject failed');
+    }
   };
 
   return (

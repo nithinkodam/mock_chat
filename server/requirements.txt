@@ -5,10 +5,13 @@ requests
 pymongo 
 python-socketio[asgi]
 python-multipart
+pydantic
 pydantic[email]
 passlib[bcrypt]
 motor
+python-jose
 python-jose[cryptography]
+python-socketio
 python-socketio[asyncio_server]
 aiofiles
 python-dotenv

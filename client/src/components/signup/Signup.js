@@ -1,6 +1,6 @@
-// Signup.js
 import React, { useState } from 'react';
 import axios from 'axios';
+import Swal from 'sweetalert2'
 import { useNavigate } from 'react-router-dom';
 
 const Signup = () => {
@@ -13,9 +13,20 @@ const Signup = () => {
     setError('');
     try {
       const res = await axios.post('http://localhost:8000/signup', formData);
-      alert(res.data.message);
+      // alert(res.data.message);
+      Swal.fire({
+            title: 'Account created!',
+            text: 'You have been successfully signed up.',
+            icon: 'success',
+            timer: 1000,
+            showConfirmButton: false
+          }).then(() => {
+            localStorage.removeItem('token');
+            navigate('/');
+          });
       navigate('/signin');
     } catch (err) {
+      console.error('Signup failed', err);
       if (err.response?.data?.detail) {
         setError(err.response.data.detail);
       } else {
