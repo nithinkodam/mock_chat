@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { initSocket } from '../socket';
+import { Link } from 'react-router-dom';
 
 const Signin = () => {
   const [formData, setFormData] = useState({ email: '', password: '' });
@@ -79,9 +80,12 @@ const Signin = () => {
 
         <p className="mt-10 text-center text-sm text-gray-500">
           Not a member?{' '}
-          <a href="/signup" className="font-semibold text-indigo-600 hover:text-indigo-500">
+          <Link
+            to="/signup"
+            className="font-semibold text-indigo-600 hover:text-indigo-500"
+          >
             Signup
-          </a>
+          </Link>
         </p>
       </div>
     </div>

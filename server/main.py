@@ -41,7 +41,7 @@ socket_app = socketio.ASGIApp(sio, app)
 # ----------------------------
 # MongoDB
 # ----------------------------
-MONGO_URI = os.getenv("MONGO_URI", "")
+MONGO_URI = "mongodb+srv://nithinkodam69:nithinmongo@cluster0.pamoj.mongodb.net/?retryWrites=true&w=majority"
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI is not set. Put it in your environment or .env")
 
@@ -401,31 +401,31 @@ async def fetch_chat(friend_username: str, current_user=Depends(get_current_user
 
 from datetime import datetime, timezone
 
+
+
+import asyncio
+
 @app.post("/chat/{friend_username}/send")
 async def send_chat_message(friend_username: str, data: MessageInput, current_user=Depends(get_current_user)):
-    # Make an explicit UTC ISO timestamp with 'Z' (no ambiguity).
     timestamp = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     image_flag = "Yes" if data.image else "No"
     text_payload = data.image if data.image else data.text
 
-    # push to sender's copy
-    await db.users.update_one(
+    sender_update = db.users.update_one(
         {"email": current_user["email"], "friends.name": friend_username},
         {"$push": {"friends.$.messages": {
             "text": text_payload, "image": image_flag, "time": timestamp, "type": "sent", "status": "read"
         }}}
     )
 
-    # push to receiver's copy
-    await db.users.update_one(
+    receiver_update = db.users.update_one(
         {"username": friend_username, "friends.name": current_user["username"]},
         {"$push": {"friends.$.messages": {
             "text": text_payload, "image": image_flag, "time": timestamp, "type": "received", "status": "unread"
         }}}
     )
 
-    # realtime: deliver message to receiver (send the same timestamp)
-    await emit_to_user(friend_username, "message:new", {
+    realtime_msg = emit_to_user(friend_username, "message:new", {
         "from": current_user["username"],
         "to": friend_username,
         "message": {
@@ -435,18 +435,22 @@ async def send_chat_message(friend_username: str, data: MessageInput, current_us
         }
     })
 
-    # realtime: bump unseen count for receiver's chat list for this sender
-    rec_doc = await db.users.find_one({"username": friend_username})
-    unseen = 0
-    if rec_doc:
-        for f in rec_doc.get("friends", []):
-            if f.get("name") == current_user["username"]:
-                unseen = sum(1 for m in f.get("messages", []) if m.get("type") == "received" and m.get("status") == "unread")
-                break
+    # fetch unseen count asynchronously
+    async def update_unseen():
+        rec_doc = await db.users.find_one({"username": friend_username})
+        unseen = 0
+        if rec_doc:
+            for f in rec_doc.get("friends", []):
+                if f.get("name") == current_user["username"]:
+                    unseen = sum(1 for m in f.get("messages", []) if m.get("type") == "received" and m.get("status") == "unread")
+                    break
+        await emit_to_user(friend_username, "chat:unseen_update", {"friendUsername": current_user["username"], "unseenCount": unseen})
 
-    await emit_to_user(friend_username, "chat:unseen_update", {"friendUsername": current_user["username"], "unseenCount": unseen})
+    # Run DB updates and realtime messages concurrently
+    await asyncio.gather(sender_update, receiver_update, realtime_msg, update_unseen())
 
     return {"message": "sent"}
+
 
 @app.post("/chat/mark_read")
 async def mark_messages_read(data: dict, current_user=Depends(get_current_user)):
