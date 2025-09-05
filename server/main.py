@@ -41,7 +41,6 @@ socket_app = socketio.ASGIApp(sio, app)
 # ----------------------------
 # MongoDB
 # ----------------------------
-MONGO_URI = "mongodb+srv://nithinkodam69:nithinmongo@cluster0.pamoj.mongodb.net/?retryWrites=true&w=majority"
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI is not set. Put it in your environment or .env")
 
