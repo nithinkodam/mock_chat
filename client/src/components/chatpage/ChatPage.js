@@ -47,7 +47,7 @@ const ChatPage = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await axios.get('http://localhost:8000/me', {
+        const res = await axios.get('https://mock-chat-backend.onrender.com/me', {
           headers: { Authorization: `Bearer ${token}` }
         });
         const user = res.data;
@@ -64,7 +64,7 @@ const ChatPage = () => {
   useEffect(() => {
     const fetchFriend = async () => {
       try {
-        const res = await axios.get(`http://localhost:8000/him?name=${friend_username}`, {
+        const res = await axios.get(`https://mock-chat-backend.onrender.com/him?name=${friend_username}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         setFriendData(res.data);
@@ -80,7 +80,7 @@ const ChatPage = () => {
     const markAsReadREST = async () => {
       try {
         await axios.post(
-          'http://localhost:8000/chat/mark_read',
+          'https://mock-chat-backend.onrender.com/chat/mark_read',
           { username: friend_username },
           {
             headers: {
@@ -123,7 +123,7 @@ const ChatPage = () => {
     // optional: friend updated profile (refetch)
     const onProfileUpdated = ({ username }) => {
       if (username === friend_username) {
-        axios.get(`http://localhost:8000/him?name=${friend_username}`, {
+        axios.get(`https://mock-chat-backend.onrender.com/him?name=${friend_username}`, {
           headers: { Authorization: `Bearer ${token}` }
         }).then(r => setFriendData(r.data)).catch(() => {});
       }
@@ -156,7 +156,7 @@ const ChatPage = () => {
     };
 
     try {
-      await axios.post(`http://localhost:8000/chat/${friend_username}/send`, { text: input }, {
+      await axios.post(`https://mock-chat-backend.onrender.com/chat/${friend_username}/send`, { text: input }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setMsgs(prev => [...prev, newMsg]);
@@ -184,7 +184,7 @@ const ChatPage = () => {
 
       try {
         // backend accepts { text, image } (we keep same contract)
-        await axios.post(`http://localhost:8000/chat/${friend_username}/send`, { text: '', image: base64Image }, {
+        await axios.post(`https://mock-chat-backend.onrender.com/chat/${friend_username}/send`, { text: '', image: base64Image }, {
           headers: { Authorization: `Bearer ${token}` }
         });
         setMsgs(prev => [...prev, newMsg]);

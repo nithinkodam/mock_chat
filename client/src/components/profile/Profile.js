@@ -13,7 +13,7 @@ const Profile = () => {
     const token = localStorage.getItem('token');
     if (!token) return;
     try {
-      const res = await axios.get('http://localhost:8000/me', {
+      const res = await axios.get('https://mock-chat-backend.onrender.com/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setUser(res.data);
@@ -46,7 +46,7 @@ const Profile = () => {
     setUploading(true);
 
     try {
-      await axios.post('http://localhost:8000/profile/upload', formData, {
+      await axios.post('https://mock-chat-backend.onrender.com/profile/upload', formData, {
         headers: { Authorization: `Bearer ${token}` }
       });
       await fetchUser();

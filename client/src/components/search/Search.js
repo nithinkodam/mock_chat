@@ -16,7 +16,7 @@ const Search = () => {
   const fetchMe = async () => {
     if (!token) return;
     try {
-      const res = await axios.get('http://localhost:8000/me', {
+      const res = await axios.get('https://mock-chat-backend.onrender.com/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setMe(res.data);
@@ -60,7 +60,7 @@ const Search = () => {
       return;
     }
     const timer = setTimeout(() => {
-      axios.get(`http://localhost:8000/users/search`, {
+      axios.get(`https://mock-chat-backend.onrender.com/users/search`, {
         params: { q: query },
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -79,7 +79,7 @@ const Search = () => {
     if (me?.username === targetUsername) return;
 
     try {
-      await axios.post(`http://localhost:8000/requests`, {
+      await axios.post(`https://mock-chat-backend.onrender.com/requests`, {
         toUsername: targetUsername
       }, {
         headers: { Authorization: `Bearer ${token}` }

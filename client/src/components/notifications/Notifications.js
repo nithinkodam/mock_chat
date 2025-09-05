@@ -9,7 +9,7 @@ const Notifications = () => {
     const token = localStorage.getItem('token');
     if (!token) return;
     try {
-      const res = await axios.get('http://localhost:8000/me', {
+      const res = await axios.get('https://mock-chat-backend.onrender.com/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRequests(res.data.requests || []);
@@ -41,7 +41,7 @@ const Notifications = () => {
   const handleAccept = async (username) => {
     const token = localStorage.getItem('token');
     try {
-      await axios.post('http://localhost:8000/requests/accept', { requesterUsername: username }, {
+      await axios.post('https://mock-chat-backend.onrender.com/requests/accept', { requesterUsername: username }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRequests(prev => prev.filter(r => r !== username));
@@ -54,7 +54,7 @@ const Notifications = () => {
   const handleReject = async (username) => {
     const token = localStorage.getItem('token');
     try {
-      await axios.post('http://localhost:8000/requests/reject', { requesterUsername: username }, {
+      await axios.post('https://mock-chat-backend.onrender.com/requests/reject', { requesterUsername: username }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setRequests(prev => prev.filter(r => r !== username));
